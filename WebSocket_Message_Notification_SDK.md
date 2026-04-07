@@ -284,7 +284,7 @@ export type EventHandlerMap = {
  * WebSocket连接管理器
  * 负责管理WebSocket连接的创建、维护和销毁
  */
-export class WebSocketConnectionManager {
+export class ConnectionManager {
     private websocket: WebSocket | null = null;
     private config: WebSocketSDKConfig;
     private state: ConnectionState = ConnectionState.DISCONNECTED;
@@ -1217,7 +1217,7 @@ export class EventDispatcher {
  * 提供统一的消息通知接口
  */
 export class NotificationSDK {
-    private connectionManager: WebSocketConnectionManager;
+    private connectionManager: ConnectionManager;
     private messageQueue: MessageQueueManager;
     private eventDispatcher: EventDispatcher;
     private config: WebSocketSDKConfig;
@@ -1231,7 +1231,7 @@ export class NotificationSDK {
     constructor(config: WebSocketSDKConfig) {
         this.config = { ...DEFAULT_CONFIG, ...config };
 
-        this.connectionManager = new WebSocketConnectionManager(this.config);
+        this.connectionManager = new ConnectionManager(this.config);
         this.messageQueue = new MessageQueueManager(this.config.messageQueueSize);
         this.eventDispatcher = new EventDispatcher();
 

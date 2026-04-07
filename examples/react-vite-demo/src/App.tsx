@@ -188,6 +188,12 @@ export default function App() {
       reconnectMaxDelay: Number(config.reconnectMaxDelay),
       connectionTimeout: Number(config.connectionTimeout),
       messageQueueSize: Number(config.messageQueueSize),
+      headers:{
+        token: 'Bearer ' + config.authToken.trim(),
+      },
+      // socketIOOptions: {
+      //   withCredentials: true,
+      // },
       debug: config.debug,
       autoConnect: false
     };

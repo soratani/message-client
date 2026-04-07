@@ -30,6 +30,9 @@ export interface WebSocketSDKConfig {
   endpoint: string;
   clientId: string;
   authToken?: string;
+  preferWebSocketTransport?: boolean;
+  ackTimeout?: number;
+  pendingSweepInterval?: number;
   heartbeatInterval?: number;
   heartbeatTimeout?: number;
   maxReconnectAttempts?: number;
@@ -44,11 +47,13 @@ export interface WebSocketSDKConfig {
   useBinary?: boolean;
   heartbeatAdaptive?: HeartbeatAdaptiveConfig;
   messageBatch?: MessageBatchConfig;
-  WebSocketImpl?: new (url: string, protocols?: string | string[]) => WebSocket;
-  socketIOOptions?: Partial<ManagerOptions & SocketOptions>;
+  socketIOOptions?: Omit<Partial<ManagerOptions & SocketOptions>, 'extraHeaders'>;
 }
 
 export const DEFAULT_CONFIG: Omit<WebSocketSDKConfig, "endpoint" | "clientId"> = {
+  preferWebSocketTransport: true,
+  ackTimeout: 30000,
+  pendingSweepInterval: 1000,
   heartbeatInterval: 30000,
   heartbeatTimeout: 10000,
   maxReconnectAttempts: 10,

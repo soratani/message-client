@@ -1,13 +1,14 @@
----
+***
+
 AIGC:
-    ContentProducer: Minimax Agent AI
-    ContentPropagator: Minimax Agent AI
-    Label: AIGC
-    ProduceID: dd8d46d55d29221b68dcb418bb0b7a01
-    PropagateID: dd8d46d55d29221b68dcb418bb0b7a01
-    ReservedCode1: 3045022100953a6f4fb98b0c705eb0d2b4878d165e54284bcef9359a94947167efcf6be9090220292766ea90f2cb514163612bf0a6df6636137c7ca2a5cb39cdc47965dc39287b
-    ReservedCode2: 3044022002593e40b49b65ba605a9ce4c5898d5702262ad288fd2c63b3f96922adb2cd5902200acff6e5ef7faf1394817806d2786b9e8b38e03ea901341b5006e834201d6c04
----
+ContentProducer: Minimax Agent AI
+ContentPropagator: Minimax Agent AI
+Label: AIGC
+ProduceID: dd8d46d55d29221b68dcb418bb0b7a01
+PropagateID: dd8d46d55d29221b68dcb418bb0b7a01
+ReservedCode1: 3045022100953a6f4fb98b0c705eb0d2b4878d165e54284bcef9359a94947167efcf6be9090220292766ea90f2cb514163612bf0a6df6636137c7ca2a5cb39cdc47965dc39287b
+ReservedCode2: 3044022002593e40b49b65ba605a9ce4c5898d5702262ad288fd2c63b3f96922adb2cd5902200acff6e5ef7faf1394817806d2786b9e8b38e03ea901341b5006e834201d6c04
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # Node.js 后端服务 Socket 优化深度指南：从基础到 IM 通信实战
 
@@ -599,3 +600,5 @@ class PriorityMessageQueue {
     this.processInterval = setInterval(() => {
       this.processNext();
     }, 10); // 10ms 处�
+```
+
