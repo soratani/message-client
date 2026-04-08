@@ -557,6 +557,7 @@ export class ConnectionManager {
    * 支持单条、数组与 { messages: [] } 批量结构。
    */
   private extractMessages(data: unknown): Message[] {
+    console.log("extractMessages", data);
     if (this.isMessage(data)) {
       return [data];
     }

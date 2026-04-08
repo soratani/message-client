@@ -1,19 +1,19 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CommandAction,
   ConnectionState,
   MessagePriority,
   MessageType,
-  NotificationSDK,
-  createWebSocketSDK,
   type Message,
   type WebSocketSDKConfig
 } from "@soratani-code/notification-sdk";
 import { check, login } from "./apis/auth";
 import { cache } from "./apis/client";
-
-type SDKStats = ReturnType<NotificationSDK["getStats"]>;
-type LogLevel = "info" | "warn" | "error" | "sent" | "recv";
+import { ConnectionConfigCard } from "./components/ConnectionConfigCard";
+import { LoginModal } from "./components/LoginModal";
+import { MessageSendCard } from "./components/MessageSendCard";
+import { RuntimeStatusCard } from "./components/RuntimeStatusCard";
+import { useNotificationSdk, type LogLevel } from "./hooks/useNotificationSdk";
 
 type LogItem = {
   id: string;
@@ -84,6 +84,19 @@ function formatTime(timestamp: number): string {
   });
 }
 
+function getPriorityLabel(priority: MessagePriority): string {
+  if (priority === MessagePriority.LOW) {
+    return "LOW";
+  }
+  if (priority === MessagePriority.NORMAL) {
+    return "NORMAL";
+  }
+  if (priority === MessagePriority.HIGH) {
+    return "HIGH";
+  }
+  return "CRITICAL";
+}
+
 function getStateLabel(state: ConnectionState): string {
   if (state === ConnectionState.CONNECTED) {
     return "已连接";
@@ -100,32 +113,12 @@ function getStateLabel(state: ConnectionState): string {
   return "未连接";
 }
 
-function getPriorityLabel(priority: MessagePriority): string {
-  if (priority === MessagePriority.LOW) {
-    return "LOW";
-  }
-  if (priority === MessagePriority.NORMAL) {
-    return "NORMAL";
-  }
-  if (priority === MessagePriority.HIGH) {
-    return "HIGH";
-  }
-  return "CRITICAL";
-}
-
 export default function App() {
-  const sdkRef = useRef<NotificationSDK | null>(null);
-  const stateDisposerRef = useRef<(() => void) | null>(null);
-  const errorDisposerRef = useRef<(() => void) | null>(null);
-  const subscriptionRef = useRef<string | null>(null);
-
   const [config, setConfig] = useState<ConfigForm>(initialConfig);
-  const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [stats, setStats] = useState<SDKStats | null>(null);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
   const [loginUser, setLoginUser] = useState("");
   const [loginForm, setLoginForm] = useState<LoginForm>({ account: "", password: "" });
 
@@ -149,7 +142,6 @@ export default function App() {
   });
   const [historyFilter, setHistoryFilter] = useState<"all" | MessageType>("all");
 
-  const canUseSdk = sdkRef.current !== null;
   const canOperateSdk = isAuthenticated;
 
   const filteredMessages = useMemo(() => {
@@ -181,23 +173,6 @@ export default function App() {
     return false;
   };
 
-  const cleanupListeners = (): void => {
-    if (sdkRef.current && subscriptionRef.current) {
-      sdkRef.current.unsubscribe(subscriptionRef.current);
-      subscriptionRef.current = null;
-    }
-
-    if (stateDisposerRef.current) {
-      stateDisposerRef.current();
-      stateDisposerRef.current = null;
-    }
-
-    if (errorDisposerRef.current) {
-      errorDisposerRef.current();
-      errorDisposerRef.current = null;
-    }
-  };
-
   const createSdkConfig = (): WebSocketSDKConfig => {
     return {
       endpoint: config.endpoint.trim(),
@@ -213,149 +188,35 @@ export default function App() {
       socketIOOptions: {
         withCredentials: true,
       },
+      headers: {
+        token: 'Bearer ' + config.authToken.trim(),
+      },
       debug: config.debug,
       autoConnect: false
     };
   };
 
-  const subscribeWithCurrentTypes = (sdk: NotificationSDK): void => {
-    if (subscriptionRef.current) {
-      sdk.unsubscribe(subscriptionRef.current);
-      subscriptionRef.current = null;
-    }
-
-    const types = messageTypeList.filter((item) => selectedTypes[item]);
-    if (types.length === 0) {
-      appendLog("warn", "未选择任何订阅类型，已跳过订阅。");
-      return;
-    }
-
-    subscriptionRef.current = sdk.subscribe(types, async (message: Message) => {
+  const {
+    canUseSdk,
+    connectionState,
+    stats,
+    ensureSdk,
+    initializeSdk,
+    connectNow,
+    disconnectNow,
+    reconnectNow,
+    disposeSdk,
+    refreshSubscription,
+    subscribeNextSystemMessage
+  } = useNotificationSdk({
+    createSdkConfig,
+    selectedTypes,
+    guardAuth,
+    onLog: appendLog,
+    onMessage: (message: Message) => {
       setMessages((prev) => [message, ...prev].slice(0, 240));
-      appendLog("recv", `收到消息 ${message.type} (${message.id})`);
-    });
-
-    appendLog("info", `已订阅 ${types.length} 种消息类型。`);
-  };
-
-  const createAndBindSdk = (): NotificationSDK => {
-    const sdk = createWebSocketSDK(createSdkConfig());
-    sdkRef.current = sdk;
-
-    stateDisposerRef.current = sdk.onConnectionChange((next: ConnectionState, prev: ConnectionState) => {
-      setConnectionState(next);
-      appendLog("info", `连接状态: ${prev} -> ${next}`);
-    });
-
-    errorDisposerRef.current = sdk.onError((error: Error) => {
-      appendLog("error", `连接错误: ${error.message}`);
-    });
-
-    setConnectionState(sdk.getConnectionState());
-    subscribeWithCurrentTypes(sdk);
-    appendLog("info", "SDK 已初始化。");
-    return sdk;
-  };
-
-  const initializeSdk = (): void => {
-    if (!guardAuth("初始化 SDK")) {
-      return;
     }
-
-    if (!config.endpoint.trim() || !config.clientId.trim()) {
-      appendLog("error", "请先填写 endpoint 与 clientId。");
-      return;
-    }
-
-    if (sdkRef.current) {
-      cleanupListeners();
-      sdkRef.current.dispose();
-      sdkRef.current = null;
-    }
-
-    setMessages([]);
-    setStats(null);
-    createAndBindSdk();
-  };
-
-  const ensureSdk = (): NotificationSDK | null => {
-    if (!guardAuth("使用 SDK")) {
-      return null;
-    }
-
-    if (sdkRef.current) {
-      return sdkRef.current;
-    }
-
-    if (!config.endpoint.trim() || !config.clientId.trim()) {
-      appendLog("error", "SDK 尚未初始化，且 endpoint/clientId 为空。");
-      return null;
-    }
-
-    return createAndBindSdk();
-  };
-
-  const connectNow = async (): Promise<void> => {
-    const sdk = ensureSdk();
-    if (!sdk) {
-      return;
-    }
-
-    try {
-      appendLog("info", "开始连接...");
-      await sdk.connect();
-      appendLog("info", "连接成功。");
-    } catch (error) {
-      const connectError = error instanceof Error ? error : new Error("连接失败");
-      appendLog("error", connectError.message);
-    }
-  };
-
-  const disconnectNow = (): void => {
-    if (!guardAuth("断开连接")) {
-      return;
-    }
-
-    if (!sdkRef.current) {
-      return;
-    }
-
-    sdkRef.current.disconnect("UI manual disconnect");
-    appendLog("warn", "已手动断开连接。");
-  };
-
-  const reconnectNow = async (): Promise<void> => {
-    const sdk = ensureSdk();
-    if (!sdk) {
-      return;
-    }
-
-    try {
-      appendLog("info", "触发重连...");
-      await sdk.reconnect();
-      appendLog("info", "重连成功。");
-    } catch (error) {
-      const reconnectError = error instanceof Error ? error : new Error("重连失败");
-      appendLog("error", reconnectError.message);
-    }
-  };
-
-  const disposeSdk = (): void => {
-    if (!guardAuth("销毁 SDK")) {
-      return;
-    }
-
-    if (!sdkRef.current) {
-      return;
-    }
-
-    cleanupListeners();
-    sdkRef.current.dispose();
-    sdkRef.current = null;
-    setConnectionState(ConnectionState.DISCONNECTED);
-    setStats(null);
-    appendLog("warn", "SDK 已销毁。");
-  };
+  });
 
   const sendTextMessage = async (): Promise<void> => {
     const sdk = ensureSdk();
@@ -456,37 +317,6 @@ export default function App() {
     }
   };
 
-  const refreshSubscription = (): void => {
-    if (!guardAuth("应用订阅配置")) {
-      return;
-    }
-
-    if (!sdkRef.current) {
-      appendLog("warn", "SDK 未初始化，无法重置订阅。");
-      return;
-    }
-
-    subscribeWithCurrentTypes(sdkRef.current);
-  };
-
-  const subscribeNextSystemMessage = (): void => {
-    if (!guardAuth("订阅一次性消息")) {
-      return;
-    }
-
-    if (!sdkRef.current) {
-      appendLog("warn", "SDK 未初始化，无法订阅一次性消息。");
-      return;
-    }
-
-    sdkRef.current.subscribeOnce(MessageType.SYSTEM, async (message: Message) => {
-      appendLog("recv", `一次性订阅收到 SYSTEM 消息: ${message.id}`);
-      setMessages((prev) => [message, ...prev].slice(0, 240));
-    });
-
-    appendLog("info", "已开启下一条 SYSTEM 消息的一次性订阅。");
-  };
-
   const openLoginModal = (): void => {
     setIsLoginOpen(true);
   };
@@ -495,8 +325,7 @@ export default function App() {
     setIsLoginOpen(false);
   };
 
-  const handleLoginSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault();
+  const handleLoginSubmit = async (): Promise<void> => {
     const account = loginForm.account.trim();
     const password = loginForm.password.trim();
 
@@ -518,11 +347,7 @@ export default function App() {
   };
 
   const handleLogout = (): void => {
-    cleanupListeners();
-    sdkRef.current?.dispose();
-    sdkRef.current = null;
-    setConnectionState(ConnectionState.DISCONNECTED);
-    setStats(null);
+    disposeSdk();
     setMessages([]);
     setIsAuthenticated(false);
     setLoginUser("");
@@ -570,28 +395,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (!sdkRef.current) {
-        return;
-      }
-
-      setStats(sdkRef.current.getStats());
-    }, 1000);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      cleanupListeners();
-      sdkRef.current?.dispose();
-      sdkRef.current = null;
-    };
-  }, []);
-
   return (
     <div className="page-shell">
       <header className="hero">
@@ -621,324 +424,65 @@ export default function App() {
       </header>
 
       <main className="grid-layout">
-        <section className="card config-card">
-          <h2>连接配置</h2>
-          <div className="form-grid two-col">
-            <label>
-              Endpoint
-              <input
-                value={config.endpoint}
-                onChange={(event) => setConfig((prev) => ({ ...prev, endpoint: event.target.value }))}
-                placeholder="ws://localhost:3000"
-              />
-            </label>
-            <label>
-              Client ID
-              <input
-                value={config.clientId}
-                onChange={(event) => setConfig((prev) => ({ ...prev, clientId: event.target.value }))}
-                placeholder="react_demo_client"
-              />
-            </label>
-            <label>
-              Auth Token
-              <input
-                value={config.authToken}
-                onChange={(event) => setConfig((prev) => ({ ...prev, authToken: event.target.value }))}
-                placeholder="可选"
-              />
-            </label>
-            <label>
-              Connection Timeout (ms)
-              <input
-                type="number"
-                min={1000}
-                value={config.connectionTimeout}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, connectionTimeout: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Heartbeat Interval (ms)
-              <input
-                type="number"
-                min={1000}
-                value={config.heartbeatInterval}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, heartbeatInterval: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Heartbeat Timeout (ms)
-              <input
-                type="number"
-                min={1000}
-                value={config.heartbeatTimeout}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, heartbeatTimeout: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Max Reconnect Attempts
-              <input
-                type="number"
-                min={1}
-                value={config.maxReconnectAttempts}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, maxReconnectAttempts: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Queue Size
-              <input
-                type="number"
-                min={10}
-                value={config.messageQueueSize}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, messageQueueSize: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Reconnect Base Delay (ms)
-              <input
-                type="number"
-                min={100}
-                value={config.reconnectBaseDelay}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, reconnectBaseDelay: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-            <label>
-              Reconnect Max Delay (ms)
-              <input
-                type="number"
-                min={500}
-                value={config.reconnectMaxDelay}
-                onChange={(event) =>
-                  setConfig((prev) => ({ ...prev, reconnectMaxDelay: Number(event.target.value) || 0 }))
-                }
-              />
-            </label>
-          </div>
+        <ConnectionConfigCard
+          config={config}
+          canOperateSdk={canOperateSdk}
+          canUseSdk={canUseSdk}
+          onConfigChange={setConfig}
+          onInitializeSdk={initializeSdk}
+          onConnect={connectNow}
+          onDisconnect={disconnectNow}
+          onReconnect={reconnectNow}
+          onDispose={disposeSdk}
+        />
 
-          <label className="toggle-row">
-            <input
-              type="checkbox"
-              checked={config.debug}
-              onChange={(event) => setConfig((prev) => ({ ...prev, debug: event.target.checked }))}
-            />
-            启用 SDK Debug 输出
-          </label>
+        <RuntimeStatusCard
+          stats={stats}
+          selectedTypes={selectedTypes}
+          messageTypeList={messageTypeList}
+          canOperateSdk={canOperateSdk}
+          canUseSdk={canUseSdk}
+          onToggleType={(type, checked) =>
+            setSelectedTypes((prev) => ({
+              ...prev,
+              [type]: checked
+            }))
+          }
+          onRefreshSubscription={refreshSubscription}
+          onSubscribeNextSystemMessage={subscribeNextSystemMessage}
+        />
 
-          <div className="action-row">
-            <button className="btn primary" onClick={initializeSdk} disabled={!canOperateSdk}>
-              初始化 SDK
-            </button>
-            <button
-              className="btn"
-              onClick={() => void connectNow()}
-              disabled={!canOperateSdk || !config.endpoint || !config.clientId}
-            >
-              连接
-            </button>
-            <button className="btn" onClick={disconnectNow} disabled={!canOperateSdk || !canUseSdk}>
-              断开
-            </button>
-            <button className="btn" onClick={() => void reconnectNow()} disabled={!canOperateSdk || !canUseSdk}>
-              重连
-            </button>
-            <button className="btn danger" onClick={disposeSdk} disabled={!canOperateSdk || !canUseSdk}>
-              销毁
-            </button>
-          </div>
-        </section>
-
-        <section className="card stats-card">
-          <h2>运行状态</h2>
-          <div className="kpi-grid">
-            <article>
-              <p>连接状态</p>
-              <strong>{stats?.connection.state ?? "-"}</strong>
-            </article>
-            <article>
-              <p>在线</p>
-              <strong>{stats?.connection.isConnected ? "YES" : "NO"}</strong>
-            </article>
-            <article>
-              <p>队列长度</p>
-              <strong>{stats?.queue.queueSize ?? 0}</strong>
-            </article>
-            <article>
-              <p>Pending</p>
-              <strong>{stats?.queue.pendingSize ?? 0}</strong>
-            </article>
-            <article>
-              <p>总分发</p>
-              <strong>{stats?.dispatcher.totalDispatched ?? 0}</strong>
-            </article>
-            <article>
-              <p>订阅者</p>
-              <strong>{stats?.dispatcher.subscriberCount ?? 0}</strong>
-            </article>
-          </div>
-
-          <div className="subsection">
-            <h3>订阅控制</h3>
-            <div className="type-list">
-              {messageTypeList.map((item) => (
-                <label key={item} className="chip">
-                  <input
-                    type="checkbox"
-                    checked={selectedTypes[item]}
-                    onChange={(event) =>
-                      setSelectedTypes((prev) => ({
-                        ...prev,
-                        [item]: event.target.checked
-                      }))
-                    }
-                  />
-                  {item}
-                </label>
-              ))}
-            </div>
-            <div className="action-row">
-              <button className="btn" onClick={refreshSubscription} disabled={!canOperateSdk || !canUseSdk}>
-                应用订阅配置
-              </button>
-              <button className="btn" onClick={subscribeNextSystemMessage} disabled={!canOperateSdk || !canUseSdk}>
-                订阅下一条 SYSTEM
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section className="card message-card">
-          <h2>消息发送</h2>
-          <div className="form-grid two-col">
-            <label>
-              Target (可选)
-              <input value={messageTarget} onChange={(event) => setMessageTarget(event.target.value)} />
-            </label>
-            <label>
-              Priority
-              <select
-                value={messagePriority}
-                onChange={(event) => setMessagePriority(Number(event.target.value) as MessagePriority)}
-              >
-                {priorityList.map((item) => (
-                  <option key={item} value={item}>
-                    {getPriorityLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="subsection">
-            <h3>发送 TEXT</h3>
-            <textarea
-              value={textContent}
-              onChange={(event) => setTextContent(event.target.value)}
-              rows={3}
-            />
-            <div className="action-row">
-              <button className="btn primary" onClick={() => void sendTextMessage()} disabled={!canOperateSdk || !canUseSdk}>
-                发送文本
-              </button>
-            </div>
-          </div>
-
-          <div className="subsection">
-            <h3>发送 JSON</h3>
-            <textarea
-              value={jsonContent}
-              onChange={(event) => setJsonContent(event.target.value)}
-              rows={6}
-            />
-            <div className="action-row">
-              <button className="btn primary" onClick={() => void sendJsonMessage()} disabled={!canOperateSdk || !canUseSdk}>
-                发送 JSON
-              </button>
-            </div>
-          </div>
-
-          <div className="subsection">
-            <h3>发送 COMMAND</h3>
-            <div className="form-grid two-col">
-              <label>
-                Action
-                <select
-                  value={commandAction}
-                  onChange={(event) => setCommandAction(event.target.value as CommandAction)}
-                >
-                  {commandActionList.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Task ID
-                <input
-                  value={commandTaskId}
-                  onChange={(event) => setCommandTaskId(event.target.value)}
-                />
-              </label>
-              <label>
-                Timeout (ms)
-                <input
-                  type="number"
-                  min={1000}
-                  value={commandTimeout}
-                  onChange={(event) => setCommandTimeout(Number(event.target.value) || 0)}
-                />
-              </label>
-              <label className="toggle-row compact">
-                <input
-                  type="checkbox"
-                  checked={requireAck}
-                  onChange={(event) => setRequireAck(event.target.checked)}
-                />
-                requireAck
-              </label>
-            </div>
-            <textarea
-              value={commandParams}
-              onChange={(event) => setCommandParams(event.target.value)}
-              rows={6}
-            />
-            <div className="action-row">
-              <button className="btn primary" onClick={() => void sendCommandMessage()} disabled={!canOperateSdk || !canUseSdk}>
-                发送命令
-              </button>
-            </div>
-          </div>
-
-          <div className="subsection">
-            <h3>任务控制快捷入口</h3>
-            <div className="form-grid two-col">
-              <label>
-                Task ID
-                <input value={taskQueryId} onChange={(event) => setTaskQueryId(event.target.value)} />
-              </label>
-            </div>
-            <div className="action-row">
-              <button className="btn" onClick={() => void queryTaskProgress()} disabled={!canOperateSdk || !canUseSdk}>
-                查询进度
-              </button>
-              <button className="btn" onClick={() => void cancelTask()} disabled={!canOperateSdk || !canUseSdk}>
-                取消任务
-              </button>
-            </div>
-          </div>
-        </section>
+        <MessageSendCard
+          canOperateSdk={canOperateSdk}
+          canUseSdk={canUseSdk}
+          priorityList={priorityList}
+          commandActionList={commandActionList}
+          messageTarget={messageTarget}
+          messagePriority={messagePriority}
+          textContent={textContent}
+          jsonContent={jsonContent}
+          commandAction={commandAction}
+          commandTaskId={commandTaskId}
+          commandTimeout={commandTimeout}
+          requireAck={requireAck}
+          commandParams={commandParams}
+          taskQueryId={taskQueryId}
+          onMessageTargetChange={setMessageTarget}
+          onMessagePriorityChange={setMessagePriority}
+          onTextContentChange={setTextContent}
+          onJsonContentChange={setJsonContent}
+          onCommandActionChange={setCommandAction}
+          onCommandTaskIdChange={setCommandTaskId}
+          onCommandTimeoutChange={setCommandTimeout}
+          onRequireAckChange={setRequireAck}
+          onCommandParamsChange={setCommandParams}
+          onTaskQueryIdChange={setTaskQueryId}
+          onSendText={sendTextMessage}
+          onSendJson={sendJsonMessage}
+          onSendCommand={sendCommandMessage}
+          onQueryProgress={queryTaskProgress}
+          onCancelTask={cancelTask}
+        />
 
         <section className="card log-card">
           <h2>事件日志</h2>
@@ -993,52 +537,13 @@ export default function App() {
           </div>
         </section>
       </main>
-      {isLoginOpen ? (
-        <div className="login-modal-mask" onClick={closeLoginModal}>
-          <div className="login-modal" onClick={(event) => event.stopPropagation()}>
-            <p className="login-modal-eyebrow">Access Control</p>
-            <h2>登录 SDK 控制台</h2>
-            <p>登录后即可解锁连接、发消息、订阅与命令控制能力。</p>
-            <form className="login-form" onSubmit={handleLoginSubmit}>
-              <label>
-                账号
-                <input
-                  value={loginForm.account}
-                  onChange={(event) =>
-                    setLoginForm((prev) => ({
-                      ...prev,
-                      account: event.target.value
-                    }))
-                  }
-                  placeholder="请输入账号"
-                />
-              </label>
-              <label>
-                密码
-                <input
-                  type="password"
-                  value={loginForm.password}
-                  onChange={(event) =>
-                    setLoginForm((prev) => ({
-                      ...prev,
-                      password: event.target.value
-                    }))
-                  }
-                  placeholder="请输入密码"
-                />
-              </label>
-              <div className="action-row login-actions">
-                <button type="button" className="btn" onClick={closeLoginModal}>
-                  取消
-                </button>
-                <button type="submit" className="btn primary">
-                  登录
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      ) : null}
+      <LoginModal
+        open={isLoginOpen}
+        form={loginForm}
+        onClose={closeLoginModal}
+        onSubmit={handleLoginSubmit}
+        onFormChange={setLoginForm}
+      />
     </div>
   );
 }

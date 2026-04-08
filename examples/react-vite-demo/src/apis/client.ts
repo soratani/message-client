@@ -93,7 +93,7 @@ const http = new HttpClient({
     token: {
         accessKey: 'access_token',
         refreshKey: 'refresh_token',
-        refreshPath: '/auth/refresh',
+        refreshPath: '/auth/account/refresh',
     }
 });
 
