@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   CommandAction,
   ConnectionState,
@@ -9,6 +9,8 @@ import {
   type Message,
   type WebSocketSDKConfig
 } from "@soratani-code/notification-sdk";
+import { check, login } from "./apis/auth";
+import { cache } from "./apis/client";
 
 type SDKStats = ReturnType<NotificationSDK["getStats"]>;
 type LogLevel = "info" | "warn" | "error" | "sent" | "recv";
@@ -34,6 +36,11 @@ type ConfigForm = {
   debug: boolean;
 };
 
+type LoginForm = {
+  account: string;
+  password: string;
+};
+
 const messageTypeList: MessageType[] = Object.values(MessageType) as MessageType[];
 const commandActionList: CommandAction[] = Object.values(CommandAction) as CommandAction[];
 const priorityList: MessagePriority[] = [
@@ -44,7 +51,7 @@ const priorityList: MessagePriority[] = [
 ];
 
 const initialConfig: ConfigForm = {
-  endpoint: "ws://localhost:3000",
+  endpoint: "ws://localhost:3005",
   clientId: "react_demo_client",
   authToken: "",
   heartbeatInterval: 30000,
@@ -117,6 +124,10 @@ export default function App() {
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [stats, setStats] = useState<SDKStats | null>(null);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginForm, setLoginForm] = useState<LoginForm>({ account: "", password: "" });
 
   const [textContent, setTextContent] = useState("你好，这是一条来自 React 示例页面的消息。");
   const [jsonContent, setJsonContent] = useState('{\n  "scene": "demo",\n  "value": 42\n}');
@@ -139,6 +150,7 @@ export default function App() {
   const [historyFilter, setHistoryFilter] = useState<"all" | MessageType>("all");
 
   const canUseSdk = sdkRef.current !== null;
+  const canOperateSdk = isAuthenticated;
 
   const filteredMessages = useMemo(() => {
     if (historyFilter === "all") {
@@ -157,6 +169,16 @@ export default function App() {
       };
       return [next, ...prev].slice(0, 300);
     });
+  };
+
+  const guardAuth = (actionLabel: string): boolean => {
+    if (isAuthenticated) {
+      return true;
+    }
+
+    appendLog("warn", `${actionLabel}失败：请先登录。`);
+    setIsLoginOpen(true);
+    return false;
   };
 
   const cleanupListeners = (): void => {
@@ -188,12 +210,9 @@ export default function App() {
       reconnectMaxDelay: Number(config.reconnectMaxDelay),
       connectionTimeout: Number(config.connectionTimeout),
       messageQueueSize: Number(config.messageQueueSize),
-      headers:{
-        token: 'Bearer ' + config.authToken.trim(),
+      socketIOOptions: {
+        withCredentials: true,
       },
-      // socketIOOptions: {
-      //   withCredentials: true,
-      // },
       debug: config.debug,
       autoConnect: false
     };
@@ -239,6 +258,10 @@ export default function App() {
   };
 
   const initializeSdk = (): void => {
+    if (!guardAuth("初始化 SDK")) {
+      return;
+    }
+
     if (!config.endpoint.trim() || !config.clientId.trim()) {
       appendLog("error", "请先填写 endpoint 与 clientId。");
       return;
@@ -256,6 +279,10 @@ export default function App() {
   };
 
   const ensureSdk = (): NotificationSDK | null => {
+    if (!guardAuth("使用 SDK")) {
+      return null;
+    }
+
     if (sdkRef.current) {
       return sdkRef.current;
     }
@@ -285,6 +312,10 @@ export default function App() {
   };
 
   const disconnectNow = (): void => {
+    if (!guardAuth("断开连接")) {
+      return;
+    }
+
     if (!sdkRef.current) {
       return;
     }
@@ -310,6 +341,10 @@ export default function App() {
   };
 
   const disposeSdk = (): void => {
+    if (!guardAuth("销毁 SDK")) {
+      return;
+    }
+
     if (!sdkRef.current) {
       return;
     }
@@ -422,6 +457,10 @@ export default function App() {
   };
 
   const refreshSubscription = (): void => {
+    if (!guardAuth("应用订阅配置")) {
+      return;
+    }
+
     if (!sdkRef.current) {
       appendLog("warn", "SDK 未初始化，无法重置订阅。");
       return;
@@ -431,6 +470,10 @@ export default function App() {
   };
 
   const subscribeNextSystemMessage = (): void => {
+    if (!guardAuth("订阅一次性消息")) {
+      return;
+    }
+
     if (!sdkRef.current) {
       appendLog("warn", "SDK 未初始化，无法订阅一次性消息。");
       return;
@@ -443,6 +486,89 @@ export default function App() {
 
     appendLog("info", "已开启下一条 SYSTEM 消息的一次性订阅。");
   };
+
+  const openLoginModal = (): void => {
+    setIsLoginOpen(true);
+  };
+
+  const closeLoginModal = (): void => {
+    setIsLoginOpen(false);
+  };
+
+  const handleLoginSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    const account = loginForm.account.trim();
+    const password = loginForm.password.trim();
+
+    if (!account || !password) {
+      appendLog("warn", "请输入账号和密码后再登录。");
+      return;
+    }
+    await login({ account, password });
+    const token = await cache.get('access_token');
+    setConfig((prev) => ({
+      ...prev,
+      authToken: prev.authToken.trim() || token
+    }));
+    setIsAuthenticated(true);
+    setLoginUser(account);
+    setIsLoginOpen(false);
+    setLoginForm((prev) => ({ ...prev, password: "" }));
+    appendLog("info", `登录成功，当前用户：${account}`);
+  };
+
+  const handleLogout = (): void => {
+    cleanupListeners();
+    sdkRef.current?.dispose();
+    sdkRef.current = null;
+    setConnectionState(ConnectionState.DISCONNECTED);
+    setStats(null);
+    setMessages([]);
+    setIsAuthenticated(false);
+    setLoginUser("");
+    setIsLoginOpen(false);
+    appendLog("warn", "已退出登录，SDK 操作已锁定。");
+  };
+
+  useEffect(() => {
+    let disposed = false;
+
+    const syncAuthState = async (): Promise<void> => {
+      try {
+        const result = await check();
+        if (disposed) {
+          return;
+        }
+
+        const token = await cache.get("access_token", "");
+        const account =
+          result?.data?.name ||
+          "当前用户";
+
+        setIsAuthenticated(true);
+        setLoginUser(account);
+        setConfig((prev) => ({
+          ...prev,
+          authToken: prev.authToken.trim() || token || ""
+        }));
+        appendLog("info", `登录状态检查成功，当前用户：${account}`);
+      } catch {
+        if (disposed) {
+          return;
+        }
+
+        setIsAuthenticated(false);
+        setLoginUser("");
+        appendLog("warn", "登录状态检查失败，当前为未登录状态。");
+      }
+    };
+
+    void syncAuthState();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -476,10 +602,21 @@ export default function App() {
             一页完整演示连接管理、消息发送、命令控制、订阅策略和运行时统计，便于直接作为业务项目接入模板。
           </p>
         </div>
+        <div className="hero-login">
+          <button
+            className={`btn ${isAuthenticated ? "danger" : "primary"}`}
+            onClick={isAuthenticated ? handleLogout : openLoginModal}
+          >
+            {isAuthenticated ? "退出" : "登录"}
+          </button>
+          <p>{isAuthenticated ? `已登录：${loginUser}` : "未登录：请先登录后再操作 SDK"}</p>
+        </div>
         <div className="status-tile">
           <p className="status-label">连接状态</p>
           <p className={`status-value state-${connectionState}`}>{getStateLabel(connectionState)}</p>
-          <p className="status-hint">SDK {canUseSdk ? "已初始化" : "未初始化"}</p>
+          <p className="status-hint">
+            SDK {canUseSdk ? "已初始化" : "未初始化"} · {isAuthenticated ? "已登录" : "未登录"}
+          </p>
         </div>
       </header>
 
@@ -600,17 +737,23 @@ export default function App() {
           </label>
 
           <div className="action-row">
-            <button className="btn primary" onClick={initializeSdk}>初始化 SDK</button>
-            <button className="btn" onClick={() => void connectNow()} disabled={!config.endpoint || !config.clientId}>
+            <button className="btn primary" onClick={initializeSdk} disabled={!canOperateSdk}>
+              初始化 SDK
+            </button>
+            <button
+              className="btn"
+              onClick={() => void connectNow()}
+              disabled={!canOperateSdk || !config.endpoint || !config.clientId}
+            >
               连接
             </button>
-            <button className="btn" onClick={disconnectNow} disabled={!canUseSdk}>
+            <button className="btn" onClick={disconnectNow} disabled={!canOperateSdk || !canUseSdk}>
               断开
             </button>
-            <button className="btn" onClick={() => void reconnectNow()} disabled={!canUseSdk}>
+            <button className="btn" onClick={() => void reconnectNow()} disabled={!canOperateSdk || !canUseSdk}>
               重连
             </button>
-            <button className="btn danger" onClick={disposeSdk} disabled={!canUseSdk}>
+            <button className="btn danger" onClick={disposeSdk} disabled={!canOperateSdk || !canUseSdk}>
               销毁
             </button>
           </div>
@@ -665,10 +808,10 @@ export default function App() {
               ))}
             </div>
             <div className="action-row">
-              <button className="btn" onClick={refreshSubscription} disabled={!canUseSdk}>
+              <button className="btn" onClick={refreshSubscription} disabled={!canOperateSdk || !canUseSdk}>
                 应用订阅配置
               </button>
-              <button className="btn" onClick={subscribeNextSystemMessage} disabled={!canUseSdk}>
+              <button className="btn" onClick={subscribeNextSystemMessage} disabled={!canOperateSdk || !canUseSdk}>
                 订阅下一条 SYSTEM
               </button>
             </div>
@@ -705,7 +848,7 @@ export default function App() {
               rows={3}
             />
             <div className="action-row">
-              <button className="btn primary" onClick={() => void sendTextMessage()} disabled={!canUseSdk}>
+              <button className="btn primary" onClick={() => void sendTextMessage()} disabled={!canOperateSdk || !canUseSdk}>
                 发送文本
               </button>
             </div>
@@ -719,7 +862,7 @@ export default function App() {
               rows={6}
             />
             <div className="action-row">
-              <button className="btn primary" onClick={() => void sendJsonMessage()} disabled={!canUseSdk}>
+              <button className="btn primary" onClick={() => void sendJsonMessage()} disabled={!canOperateSdk || !canUseSdk}>
                 发送 JSON
               </button>
             </div>
@@ -772,7 +915,7 @@ export default function App() {
               rows={6}
             />
             <div className="action-row">
-              <button className="btn primary" onClick={() => void sendCommandMessage()} disabled={!canUseSdk}>
+              <button className="btn primary" onClick={() => void sendCommandMessage()} disabled={!canOperateSdk || !canUseSdk}>
                 发送命令
               </button>
             </div>
@@ -787,10 +930,10 @@ export default function App() {
               </label>
             </div>
             <div className="action-row">
-              <button className="btn" onClick={() => void queryTaskProgress()} disabled={!canUseSdk}>
+              <button className="btn" onClick={() => void queryTaskProgress()} disabled={!canOperateSdk || !canUseSdk}>
                 查询进度
               </button>
-              <button className="btn" onClick={() => void cancelTask()} disabled={!canUseSdk}>
+              <button className="btn" onClick={() => void cancelTask()} disabled={!canOperateSdk || !canUseSdk}>
                 取消任务
               </button>
             </div>
@@ -850,6 +993,52 @@ export default function App() {
           </div>
         </section>
       </main>
+      {isLoginOpen ? (
+        <div className="login-modal-mask" onClick={closeLoginModal}>
+          <div className="login-modal" onClick={(event) => event.stopPropagation()}>
+            <p className="login-modal-eyebrow">Access Control</p>
+            <h2>登录 SDK 控制台</h2>
+            <p>登录后即可解锁连接、发消息、订阅与命令控制能力。</p>
+            <form className="login-form" onSubmit={handleLoginSubmit}>
+              <label>
+                账号
+                <input
+                  value={loginForm.account}
+                  onChange={(event) =>
+                    setLoginForm((prev) => ({
+                      ...prev,
+                      account: event.target.value
+                    }))
+                  }
+                  placeholder="请输入账号"
+                />
+              </label>
+              <label>
+                密码
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(event) =>
+                    setLoginForm((prev) => ({
+                      ...prev,
+                      password: event.target.value
+                    }))
+                  }
+                  placeholder="请输入密码"
+                />
+              </label>
+              <div className="action-row login-actions">
+                <button type="button" className="btn" onClick={closeLoginModal}>
+                  取消
+                </button>
+                <button type="submit" className="btn primary">
+                  登录
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

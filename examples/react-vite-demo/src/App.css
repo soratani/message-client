@@ -109,6 +109,19 @@ body {
   color: rgba(245, 251, 250, 0.88);
 }
 
+.hero-login {
+  display: grid;
+  justify-items: end;
+  align-content: center;
+  gap: 8px;
+}
+
+.hero-login p {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.92;
+}
+
 .status-tile {
   min-width: 220px;
   border: 1px solid rgba(255, 255, 255, 0.28);
@@ -285,6 +298,56 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
+}
+
+.login-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(12, 18, 24, 0.45);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.login-modal {
+  width: min(520px, 100%);
+  border-radius: 22px;
+  border: 1px solid rgba(215, 199, 176, 0.9);
+  background: linear-gradient(170deg, #fffdf8, #fff7ec);
+  box-shadow: 0 28px 60px rgba(24, 18, 9, 0.25);
+  padding: 22px 22px 20px;
+  animation: rise 0.28s ease both;
+}
+
+.login-modal-eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+.login-modal h2 {
+  margin: 8px 0 8px;
+  font-size: 1.35rem;
+}
+
+.login-modal > p {
+  margin: 0;
+  color: #4f5e68;
+  font-size: 0.92rem;
+}
+
+.login-form {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.login-actions {
+  justify-content: flex-end;
 }
 
 .btn {
@@ -501,6 +564,10 @@ textarea:focus {
 
   .hero {
     grid-template-columns: 1fr;
+  }
+
+  .hero-login {
+    justify-items: start;
   }
 
   .status-tile {
